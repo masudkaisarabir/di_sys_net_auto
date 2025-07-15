@@ -1,0 +1,59 @@
+---
+- hosts: juniper
+  gather_facts: no
+  vars:
+    backup_dir: "/root/network/backups/JUNIPER"
+  tasks:
+
+    - name: Set ssh port (set default 22 port when port is not defined)
+      set_fact:
+        ansible_port: "{{ ansible_port | default(22) }}"
+
+    - name: Run backup with password (when password is defined)
+      when: ansible_ssh_pass is defined
+      block:
+
+      - name: Ensure that sshpass is installed
+        ansible.builtin.shell: whereis sshpass | awk '{print $2}'
+        run_once: yes
+        register: sshpass
+        delegate_to: localhost
+
+      - ansible.builtin.fail:
+          msg: >-
+            Playbook requires sshpass to use password authentication. Please install
+            sshpass and re-run the playbook.
+            You can find details at https://www.redhat.com/sysadmin/ssh-automation-sshpass
+        when: sshpass.stdout|length == 0
+
+      - name: Gather configuration and interface descriptions (with password authentication)
+        ansible.builtin.shell: >-
+          sshpass -p '{{ ansible_ssh_pass }}' ssh -o StrictHostKeyChecking=no {{ ansible_user }}@{{ inventory_hostname }} -p {{ ansible_port }} \
+          "show interfaces descriptions; echo '-----'; show configuration | display set"
+        register: export
+        delegate_to: localhost
+
+      - name: Store export to local file
+        ansible.builtin.copy:
+          content: "{{ export.stdout }}"
+          dest: "{{ backup_dir }}/{{ inventory_hostname }}_config.{{ lookup('pipe', 'date +%Y-%m-%d@%H:%M:%S') }}.txt"
+        when: export is defined
+        delegate_to: localhost
+
+    - name: Run backup without password (when password is not defined)
+      when: ansible_ssh_pass is not defined
+      block:
+
+      - name: Gather configuration and interface descriptions (with passwordless authentication)
+        ansible.builtin.shell: >-
+          ssh {{ ansible_user }}@{{ inventory_hostname }} -p {{ ansible_port }} \
+          "show configuration | display set; echo '-----'; show interfaces descriptions"
+        register: export
+        delegate_to: localhost
+
+      - name: Store export to local file
+        ansible.builtin.copy:
+          content: "{{ export.stdout }}"
+          dest: "{{ backup_dir }}/{{ inventory_hostname }}_config.{{ lookup('pipe', 'date +%Y-%m-%d@%H:%M:%S') }}.txt"
+        when: export is defined
+        delegate_to: localhost

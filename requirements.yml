@@ -1,0 +1,5 @@
+---
+collections:
+  - name: community.routeros
+  - name: ansible.netcommon
+  - name: ansible.utils

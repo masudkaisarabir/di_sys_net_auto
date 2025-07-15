@@ -1,0 +1,19 @@
+---
+- name: Deploy and run cleanup script
+  hosts: all
+  become: yes
+
+  tasks:
+    - name: Ensure the script is present on the remote host
+      copy:
+        src: /root/network/sh/old_file_cleanup.sh
+        dest: /usr/local/bin/old_file_cleanup.sh
+        mode: '0755'
+
+    - name: Run the cleanup script
+      command: /usr/local/bin/old_file_cleanup.sh
+      register: cleanup_output
+
+    - name: Show script output
+      debug:
+        var: cleanup_output.stdout

@@ -1,0 +1,25 @@
+---
+- hosts: NAT_RTR
+  gather_facts: no
+  tasks:
+
+    - name: Set ssh port (set defualt 22 port when port is not defined)
+      set_fact:
+        ansible_port: "{{ ansible_port | default(22) }}"
+
+    - name: Run backup with password (when password is defined)
+      when: ansible_ssh_pass is defined
+      block:
+
+      - name: Ensure that sshpass is installed
+        ansible.builtin.shell: whereis sshpass | awk '{print $2}'
+        run_once: yes
+        register: sshpass
+        delegate_to: localhost
+
+      - name: Execute NEW_PACKAGE_60% (with password authentication)
+        # shell with delegate_to: localhost works better that ansible.builtin.raw  
+        ansible.builtin.shell: >-
+          sshpass -p '{{ ansible_ssh_pass }}' ssh -o StrictHostKeyChecking=no {{ ansible_user }}@{{ inventory_hostname }} -p {{ ansible_port }} /system/script/run NEW_PACKAGE_60%
+        register: execute
+        delegate_to: localhost

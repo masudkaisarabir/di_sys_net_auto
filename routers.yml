@@ -1,0 +1,5 @@
+- name: Configure Routers
+  hosts: mikrotik
+  tasks:
+    - name: Ping test
+      ping:
