@@ -7,131 +7,72 @@
     ts: "{{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
 
   tasks:
-    - name: Ensure local backup directory exists
-    # লোকাল ব্যাকআপ ডিরেক্টরি তৈরি
+    - name: Ensure backup directory exists (local)
       ansible.builtin.file:
         path: "{{ backup_dir }}"
         state: directory
         mode: "0755"
       delegate_to: localhost
-      run_once: false
 
-    - name: Set default SSH port to 22 if undefined
+    - name: Set default SSH port
       set_fact:
         ansible_port: "{{ ansible_port | default(22) }}"
 
-    #####################################################################
-    # Password auth path (sshpass)
-    #####################################################################
-    - name: Backup using password auth (when ansible_ssh_pass is defined)
-      when: ansible_ssh_pass is defined
-      block:
+    ###################################################################
+    # System backup (.backup)
+    ###################################################################
+    - name: Create RouterOS system backup
+      ansible.builtin.shell: >-
+        sshpass -p '{{ ansible_ssh_pass }}'
+        ssh -o StrictHostKeyChecking=no -p {{ ansible_port }}
+        {{ ansible_user }}@{{ inventory_hostname }}
+        "/system backup save name={{ inventory_hostname }}-ros-{{ ts }} dont-encrypt=yes"
+      delegate_to: localhost
 
-        - name: Ensure sshpass exists on controller
-          ansible.builtin.shell: "command -v sshpass || true"
-          register: sshpass_path
-          changed_when: false
-          delegate_to: localhost
-          run_once: yes
+    - name: Download RouterOS system backup
+      ansible.builtin.shell: >-
+        sshpass -p '{{ ansible_ssh_pass }}'
+        scp -P {{ ansible_port }} -o StrictHostKeyChecking=no
+        {{ ansible_user }}@{{ inventory_hostname }}:"{{ inventory_hostname }}-ros-{{ ts }}.backup"
+        "{{ backup_dir }}/"
+      delegate_to: localhost
 
-        - name: Fail if sshpass missing
-          ansible.builtin.fail:
-            msg: >
-              sshpass not found on controller. Install it and re-run.
-          when: sshpass_path.stdout | length == 0
+    ###################################################################
+    # Dude export (.rsc)
+    ###################################################################
+    - name: Create Dude export
+      ansible.builtin.shell: >-
+        sshpass -p '{{ ansible_ssh_pass }}'
+        ssh -o StrictHostKeyChecking=no -p {{ ansible_port }}
+        {{ ansible_user }}@{{ inventory_hostname }}
+        "/dude export file={{ inventory_hostname }}-dude-{{ ts }}"
+      delegate_to: localhost
 
-        - name: Create RouterOS backup + Dude export on device
-          # RouterOS ফাইল সিস্টেমে .backup এবং .rsc তৈরি করবে
-          ansible.builtin.shell: >-
-            sshpass -p '{{ ansible_ssh_pass }}'
-            ssh -o StrictHostKeyChecking=no -p {{ ansible_port }}
-            {{ ansible_user }}@{{ inventory_hostname }}
-            "/system backup save name={{ inventory_hostname }}-ros-{{ ts }} dont-encrypt=yes;
-             /dude export file={{ inventory_hostname }}-dude-{{ ts }};
-             :if ([:len [/file find name=dude/dude.db]]>0) do={:put 'DUDE_DB_PRESENT'} else={:put 'NO_DUDE_DB'}"
-          register: create_files
-          delegate_to: localhost
+    - name: Download Dude export file
+      ansible.builtin.shell: >-
+        sshpass -p '{{ ansible_ssh_pass }}'
+        scp -P {{ ansible_port }} -o StrictHostKeyChecking=no
+        {{ ansible_user }}@{{ inventory_hostname }}:"{{ inventory_hostname }}-dude-{{ ts }}.rsc"
+        "{{ backup_dir }}/"
+      delegate_to: localhost
 
-        - name: Download RouterOS .backup file
-          ansible.builtin.shell: >-
-            sshpass -p '{{ ansible_ssh_pass }}'
-            scp -P {{ ansible_port }} -o StrictHostKeyChecking=no
-            {{ ansible_user }}@{{ inventory_hostname }}:"{{ inventory_hostname }}-ros-{{ ts }}.backup"
-            "{{ backup_dir }}/"
-          args:
-            executable: /bin/bash
-          delegate_to: localhost
+    ###################################################################
+    # Dude database (dude/dude.db)
+    ###################################################################
+    - name: Check if dude.db exists
+      ansible.builtin.shell: >-
+        sshpass -p '{{ ansible_ssh_pass }}'
+        ssh -o StrictHostKeyChecking=no -p {{ ansible_port }}
+        {{ ansible_user }}@{{ inventory_hostname }}
+        ":if ([:len [/file find name=dude/dude.db]]>0) do={:put 'YES'} else={:put 'NO'}"
+      register: dude_db_check
+      delegate_to: localhost
 
-        - name: Download Dude .rsc export
-          ansible.builtin.shell: >-
-            sshpass -p '{{ ansible_ssh_pass }}'
-            scp -P {{ ansible_port }} -o StrictHostKeyChecking=no
-            {{ ansible_user }}@{{ inventory_hostname }}:"{{ inventory_hostname }}-dude-{{ ts }}.rsc"
-            "{{ backup_dir }}/"
-          args:
-            executable: /bin/bash
-          delegate_to: localhost
-
-        - name: Check if dude.db exists (from earlier command output)
-          set_fact:
-            dude_db_present: "{{ 'DUDE_DB_PRESENT' in create_files.stdout }}"
-
-        - name: Download dude/dude.db if present
-          when: dude_db_present | bool
-          ansible.builtin.shell: >-
-            sshpass -p '{{ ansible_ssh_pass }}'
-            scp -P {{ ansible_port }} -o StrictHostKeyChecking=no
-            {{ ansible_user }}@{{ inventory_hostname }}:"dude/dude.db"
-            "{{ backup_dir }}/{{ inventory_hostname }}-dude-db-{{ ts }}.db"
-          args:
-            executable: /bin/bash
-          delegate_to: localhost
-
-    #####################################################################
-    # Key-based (passwordless) auth path
-    #####################################################################
-    - name: Backup using key-based auth (when ansible_ssh_pass is not defined)
-      when: ansible_ssh_pass is not defined
-      block:
-
-        - name: Create RouterOS backup + Dude export on device
-          ansible.builtin.shell: >-
-            ssh -o StrictHostKeyChecking=no -p {{ ansible_port }}
-            {{ ansible_user }}@{{ inventory_hostname }}
-            "/system backup save name={{ inventory_hostname }}-ros-{{ ts }} dont-encrypt=yes;
-             /dude export file={{ inventory_hostname }}-dude-{{ ts }};
-             :if ([:len [/file find name=dude/dude.db]]>0) do={:put 'DUDE_DB_PRESENT'} else={:put 'NO_DUDE_DB'}"
-          register: create_files
-          delegate_to: localhost
-
-        - name: Download RouterOS .backup file
-          ansible.builtin.shell: >-
-            scp -P {{ ansible_port }} -o StrictHostKeyChecking=no
-            {{ ansible_user }}@{{ inventory_hostname }}:"{{ inventory_hostname }}-ros-{{ ts }}.backup"
-            "{{ backup_dir }}/"
-          args:
-            executable: /bin/bash
-          delegate_to: localhost
-
-        - name: Download Dude .rsc export
-          ansible.builtin.shell: >-
-            scp -P {{ ansible_port }} -o StrictHostKeyChecking=no
-            {{ ansible_user }}@{{ inventory_hostname }}:"{{ inventory_hostname }}-dude-{{ ts }}.rsc"
-            "{{ backup_dir }}/"
-          args:
-            executable: /bin/bash
-          delegate_to: localhost
-
-        - name: Check if dude.db exists (from earlier command output)
-          set_fact:
-            dude_db_present: "{{ 'DUDE_DB_PRESENT' in create_files.stdout }}"
-
-        - name: Download dude/dude.db if present
-          when: dude_db_present | bool
-          ansible.builtin.shell: >-
-            scp -P {{ ansible_port }} -o StrictHostKeyChecking=no
-            {{ ansible_user }}@{{ inventory_hostname }}:"dude/dude.db"
-            "{{ backup_dir }}/{{ inventory_hostname }}-dude-db-{{ ts }}.db"
-          args:
-            executable: /bin/bash
-          delegate_to: localhost
+    - name: Download dude.db if present
+      when: "'YES' in dude_db_check.stdout"
+      ansible.builtin.shell: >-
+        sshpass -p '{{ ansible_ssh_pass }}'
+        scp -P {{ ansible_port }} -o StrictHostKeyChecking=no
+        {{ ansible_user }}@{{ inventory_hostname }}:"dude/dude.db"
+        "{{ backup_dir }}/{{ inventory_hostname }}-dude-db-{{ ts }}.db"
+      delegate_to: localhost
