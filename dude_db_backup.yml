@@ -1,15 +1,12 @@
 ---
 - hosts: DUDE_RTR
   gather_facts: no
-
   vars:
     backup_dir: "/root/network/backups/DUDE_RTR"
-    # Timestamp without colons (safer for filenames)
     ts: "{{ lookup('pipe', 'date +%Y-%m-%d@%H-%M-%S') }}"
-
   tasks:
     - name: Ensure local backup directory exists
-    ansible.builtin.file:
+      ansible.builtin.file:
         path: "{{ backup_dir }}"
         state: directory
         mode: '0755'
@@ -20,19 +17,15 @@
       set_fact:
         ansible_port: "{{ ansible_port | default(22) }}"
 
-    - name: Define backup filenames
+    - name: Define filenames
       set_fact:
-        sys_bkp_name: "{{ inventory_hostname }}-system-{{ ts }}"
-        cfg_exp_name: "{{ inventory_hostname }}-config-{{ ts }}"
         dude_bkp_name: "{{ inventory_hostname }}-dude-{{ ts }}.db"
+        cfg_exp_name: "{{ inventory_hostname }}-config-{{ ts }}"
 
-    #####################################################################
-    # Password authentication path
-    #####################################################################
-    - name: Run backups with password (when ansible_ssh_pass is defined)
+    - name: Run with password (if ansible_ssh_pass is defined)
       when: ansible_ssh_pass is defined
       block:
-        - name: Ensure that sshpass is installed
+        - name: Ensure sshpass present
           ansible.builtin.shell: "whereis sshpass | awk '{print $2}'"
           run_once: yes
           register: sshpass
@@ -40,100 +33,60 @@
 
         - name: Fail if sshpass missing
           ansible.builtin.fail:
-            msg: >-
-              Password auth requires 'sshpass'. Please install it and rerun.
-              See: https://www.redhat.com/sysadmin/ssh-automation-sshpass
+            msg: "Install sshpass to use password auth."
           when: sshpass.stdout | length == 0
 
-        - name: Create RouterOS system backup (.backup) on device
+        - name: Export Dude DB on device
           ansible.builtin.shell: >-
-            sshpass -p '{{ ansible_ssh_pass }}' ssh -o StrictHostKeyChecking=no
-            -p {{ ansible_port }} {{ ansible_user }}@{{ inventory_hostname }}
-            "/system backup save name={{ sys_bkp_name }} dont-encrypt=yes"
-          delegate_to: localhost
-
-        - name: Create RouterOS config export (.rsc) on device
-          ansible.builtin.shell: >-
-            sshpass -p '{{ ansible_ssh_pass }}' ssh -o StrictHostKeyChecking=no
-            -p {{ ansible_port }} {{ ansible_user }}@{{ inventory_hostname }}
-            "/export file={{ cfg_exp_name }}"
-          delegate_to: localhost
-
-        - name: Export Dude DB to explicit filename on device
-          ansible.builtin.shell: >-
-            sshpass -p '{{ ansible_ssh_pass }}' ssh -o StrictHostKeyChecking=no
-            -p {{ ansible_port }} {{ ansible_user }}@{{ inventory_hostname }}
+            sshpass -p '{{ ansible_ssh_pass }}' ssh -o StrictHostKeyChecking=no -p {{ ansible_port }}
+            {{ ansible_user }}@{{ inventory_hostname }}
             "/dude export-db backup-file={{ dude_bkp_name }}"
           delegate_to: localhost
 
-        - name: Download system backup (.backup)
+        - name: Export config (.rsc) on device
           ansible.builtin.shell: >-
-            sshpass -p '{{ ansible_ssh_pass }}' scp -P {{ ansible_port }}
-            -o StrictHostKeyChecking=no
-            {{ ansible_user }}@{{ inventory_hostname }}:{{ sys_bkp_name }}.backup
-            {{ backup_dir }}/
+            sshpass -p '{{ ansible_ssh_pass }}' ssh -o StrictHostKeyChecking=no -p {{ ansible_port }}
+            {{ ansible_user }}@{{ inventory_hostname }}
+            "/export file={{ cfg_exp_name }}"
           delegate_to: localhost
 
-        - name: Download config export (.rsc)
+        - name: Download Dude DB
           ansible.builtin.shell: >-
-            sshpass -p '{{ ansible_ssh_pass }}' scp -P {{ ansible_port }}
-            -o StrictHostKeyChecking=no
-            {{ ansible_user }}@{{ inventory_hostname }}:{{ cfg_exp_name }}.rsc
-            {{ backup_dir }}/
+            sshpass -p '{{ ansible_ssh_pass }}' scp -P {{ ansible_port }} -o StrictHostKeyChecking=no
+            {{ ansible_user }}@{{ inventory_hostname }}:{{ dude_bkp_name }} {{ backup_dir }}/
           delegate_to: localhost
 
-        - name: Download Dude DB export (.db)
+        - name: Download config export
           ansible.builtin.shell: >-
-            sshpass -p '{{ ansible_ssh_pass }}' scp -P {{ ansible_port }}
-            -o StrictHostKeyChecking=no
-            {{ ansible_user }}@{{ inventory_hostname }}:{{ dude_bkp_name }}
-            {{ backup_dir }}/
+            sshpass -p '{{ ansible_ssh_pass }}' scp -P {{ ansible_port }} -o StrictHostKeyChecking=no
+            {{ ansible_user }}@{{ inventory_hostname }}:{{ cfg_exp_name }}.rsc {{ backup_dir }}/
           delegate_to: localhost
 
-    #####################################################################
-    # Key-based authentication path
-    #####################################################################
-    - name: Run backups without password (when ansible_ssh_pass is not defined)
+    - name: Run with key (if ansible_ssh_pass is not defined)
       when: ansible_ssh_pass is not defined
       block:
-        - name: Create RouterOS system backup (.backup) on device
-          ansible.builtin.shell: >-
-            ssh -o StrictHostKeyChecking=no -p {{ ansible_port }}
-            {{ ansible_user }}@{{ inventory_hostname }}
-            "/system backup save name={{ sys_bkp_name }} dont-encrypt=yes"
-          delegate_to: localhost
-
-        - name: Create RouterOS config export (.rsc) on device
-          ansible.builtin.shell: >-
-            ssh -o StrictHostKeyChecking=no -p {{ ansible_port }}
-            {{ ansible_user }}@{{ inventory_hostname }}
-            "/export file={{ cfg_exp_name }}"
-          delegate_to: localhost
-
-        - name: Export Dude DB to explicit filename on device
+        - name: Export Dude DB on device
           ansible.builtin.shell: >-
             ssh -o StrictHostKeyChecking=no -p {{ ansible_port }}
             {{ ansible_user }}@{{ inventory_hostname }}
             "/dude export-db backup-file={{ dude_bkp_name }}"
           delegate_to: localhost
 
-        - name: Download system backup (.backup)
+        - name: Export config (.rsc) on device
           ansible.builtin.shell: >-
-            scp -P {{ ansible_port }} -o StrictHostKeyChecking=no
-            {{ ansible_user }}@{{ inventory_hostname }}:{{ sys_bkp_name }}.backup
-            {{ backup_dir }}/
+            ssh -o StrictHostKeyChecking=no -p {{ ansible_port }}
+            {{ ansible_user }}@{{ inventory_hostname }}
+            "/export file={{ cfg_exp_name }}"
           delegate_to: localhost
 
-        - name: Download config export (.rsc)
+        - name: Download Dude DB
           ansible.builtin.shell: >-
             scp -P {{ ansible_port }} -o StrictHostKeyChecking=no
-            {{ ansible_user }}@{{ inventory_hostname }}:{{ cfg_exp_name }}.rsc
-            {{ backup_dir }}/
+            {{ ansible_user }}@{{ inventory_hostname }}:{{ dude_bkp_name }} {{ backup_dir }}/
           delegate_to: localhost
 
-        - name: Download Dude DB export (.db)
+        - name: Download config export
           ansible.builtin.shell: >-
             scp -P {{ ansible_port }} -o StrictHostKeyChecking=no
-            {{ ansible_user }}@{{ inventory_hostname }}:{{ dude_bkp_name }}
-            {{ backup_dir }}/
+            {{ ansible_user }}@{{ inventory_hostname }}:{{ cfg_exp_name }}.rsc {{ backup_dir }}/
           delegate_to: localhost
